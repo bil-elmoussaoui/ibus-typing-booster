@@ -201,6 +201,9 @@ class TypingBoosterEngine(IBus.Engine):
         self._config = self._bus.get_config()
         self._config.connect('value-changed', self.__config_value_changed_cb)
 
+        self._has_focus = False
+        self._pending_external_input = ''
+
         # Between some events sent to ibus like forward_key_event(),
         # delete_surrounding_text(), commit_text(), a sleep is necessary.
         # Without the sleep, these events may be processed out of order.
@@ -2314,6 +2317,39 @@ class TypingBoosterEngine(IBus.Engine):
         '''
         return self._use_digits_as_select_keys
 
+    def process_external_input(self, input):
+        '''
+        Process input received because the dconf key “externalinput”
+        has been set.
+
+        If the preëdit is empty, just commit this input.
+
+        If the preëdit is not empty, insert it into the preëdit
+        at the cursor position.
+
+        :param input: The text received from the dconf key “externalinput”
+        :type input: String
+        '''
+        if not input:
+            return
+        if self._has_focus:
+            if self.is_empty():
+                self._commit_string(input, input_phrase=input)
+            else:
+                self._insert_string_at_cursor(list(input))
+                self._update_ui()
+        else:
+            if DEBUG_LEVEL > 1:
+                sys.stderr.write(
+                    "process_external_input(%s): store input as pending.\n"
+                    % input)
+            self._pending_external_input += input
+        self._config.set_value(
+            self._config_section,
+            'externalinput',
+            GLib.Variant.new_string(''))
+        return
+
     def do_candidate_clicked(self, index, button, state):
         '''Called when a candidate in the lookup table
         is clicked with the mouse
@@ -2864,6 +2900,13 @@ class TypingBoosterEngine(IBus.Engine):
         self.register_properties(self.main_prop_list)
         self.clear_context()
         self._commit_happened_after_focus_in = False
+        self._has_focus = True
+        if self._pending_external_input:
+            self._commit_string(
+                self._pending_external_input,
+                input_phrase=self._pending_external_input)
+            self._pending_external_input = ''
+            self._commit_happened_after_focus_in = True
         self._update_ui()
 
     def do_focus_out(self):
@@ -2874,6 +2917,7 @@ class TypingBoosterEngine(IBus.Engine):
         if self._has_input_purpose:
             self._input_purpose = 0
         self.clear_context()
+        self._has_focus = False
         self.reset()
         return
 
@@ -3007,4 +3051,7 @@ class TypingBoosterEngine(IBus.Engine):
             print("Reloading dictionaries ...")
             self.db.hunspell_obj.init_dictionaries()
             self.reset()
+            return
+        if name == "externalinput":
+            self.process_external_input(value)
             return
